@@ -38,13 +38,18 @@ def _settings_env_file() -> tuple[Path, ...]:
 
 class Settings(BaseSettings):
     app_env: str = "development"
+    ape_environment: str = "Development"
     log_level: str = "INFO"
+
+    ape_control_api_base_url: str = ""
+    ape_control_api_token: str = ""
 
     rabbitmq_host: str = "rabbitmq"
     rabbitmq_port: int = 5672
     rabbitmq_username: str = "guest"
     rabbitmq_password: str = "guest"
     rabbitmq_vhost: str = "/"
+    rabbitmq_exchange: str = ""
 
     mysql_host: str = "mysql"
     mysql_port: int = 3306
