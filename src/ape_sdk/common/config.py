@@ -49,7 +49,10 @@ class Settings(BaseSettings):
     rabbitmq_username: str = "guest"
     rabbitmq_password: str = "guest"
     rabbitmq_vhost: str = "/"
-    rabbitmq_exchange: str = "ape.scheduled"
+    rabbitmq_event_exchange: str = "ape.events"
+    rabbitmq_command_exchange: str = "ape.commands"
+    rabbitmq_event_route: str = "event"
+    rabbitmq_command_route: str = "command"
 
     mysql_host: str = "mysql"
     mysql_port: int = 3306
