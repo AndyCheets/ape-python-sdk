@@ -1,9 +1,15 @@
 import logging
+import re
 from typing import Final
 
 _LOG_FORMAT: Final = "%(asctime)s %(levelname)s [%(service_name)s] %(name)s - %(message)s"
 _NOISY_LOGGERS: Final = ("pika", "httpx", "urllib3")
-_BITE_HANDLER_ATTR: Final = "_bite_stream_handler"
+_HANDLER_ATTR: Final = "_ape_stream_handler"
+_SECRET_PATTERNS: Final = (
+    re.compile(r"(?i)(api[_-]?key|access[_-]?token|token|password|authorization)=([^\s&;]+)"),
+    re.compile(r"(?i)(Bearer|Basic)\s+[^\s]+"),
+    re.compile(r"(?i)(Server|Host|Database|User Id|Uid|User|Password|Pwd)=([^;]+)"),
+)
 
 
 class ServiceNameFilter(logging.Filter):
@@ -23,9 +29,22 @@ def _log_level(level: str) -> int:
     return logging.INFO
 
 
-def _bite_handler(root_logger: logging.Logger) -> logging.Handler | None:
+def sanitise_error_message(message: str) -> str:
+    safe_message = message
+    for pattern in _SECRET_PATTERNS:
+        safe_message = pattern.sub(_redact_match, safe_message)
+    return safe_message[:500]
+
+
+def _redact_match(match: re.Match[str]) -> str:
+    if match.lastindex and match.lastindex >= 2:
+        return f"{match.group(1)}=<redacted>"
+    return "<redacted>"
+
+
+def _ape_handler(root_logger: logging.Logger) -> logging.Handler | None:
     for handler in root_logger.handlers:
-        if getattr(handler, _BITE_HANDLER_ATTR, False):
+        if getattr(handler, _HANDLER_ATTR, False):
             return handler
     return None
 
@@ -35,10 +54,10 @@ def configure_logging(service_name: str, log_level: str = "INFO") -> None:
     root_logger = logging.getLogger()
     root_logger.setLevel(level)
 
-    handler = _bite_handler(root_logger)
+    handler = _ape_handler(root_logger)
     if handler is None:
         handler = logging.StreamHandler()
-        setattr(handler, _BITE_HANDLER_ATTR, True)
+        setattr(handler, _HANDLER_ATTR, True)
         root_logger.addHandler(handler)
 
     handler.setLevel(logging.NOTSET)

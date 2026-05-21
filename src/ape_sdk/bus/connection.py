@@ -1,14 +1,14 @@
 import pika
 
-from ape_sdk.common.config import Settings
+from ape_sdk.worker.settings import RabbitMqSettings
 
 
-def create_connection(settings: Settings) -> pika.BlockingConnection:
-    credentials = pika.PlainCredentials(settings.rabbitmq_username, settings.rabbitmq_password)
+def create_connection(settings: RabbitMqSettings) -> pika.BlockingConnection:
+    credentials = pika.PlainCredentials(settings.username, settings.password)
     parameters = pika.ConnectionParameters(
-        host=settings.rabbitmq_host,
-        port=settings.rabbitmq_port,
-        virtual_host=settings.rabbitmq_vhost,
+        host=settings.host,
+        port=settings.port,
+        virtual_host=settings.vhost,
         credentials=credentials,
         heartbeat=60,
         blocked_connection_timeout=30,

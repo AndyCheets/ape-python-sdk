@@ -7,6 +7,8 @@ import pika
 from pika.exceptions import AMQPError, ChannelWrongStateError, StreamLostError
 
 from ape_sdk.messages.envelope import MessageEnvelope
+from ape_sdk.worker.errors import MessagePublishError
+from ape_sdk.worker.settings import RabbitMqSettings
 
 logger = logging.getLogger(__name__)
 ConnectionFactory = Callable[[], pika.BlockingConnection]
@@ -42,7 +44,7 @@ class RabbitMQPublisher(AbstractContextManager["RabbitMQPublisher"]):
             if self.connection is not None and self.connection.is_open:
                 self.connection.close()
         except AMQPError:
-            logger.debug("Failed to close stale RabbitMQ publisher connection", exc_info=True)
+            logger.debug("Failed to close stale RabbitMQ publisher connection")
         self.connection = self.connection_factory()
         self.channel = self.connection.channel()
 
@@ -65,7 +67,6 @@ class RabbitMQPublisher(AbstractContextManager["RabbitMQPublisher"]):
                 "RabbitMQ publisher channel closed; reconnecting and retrying publish "
                 "routing_key=%s",
                 routing_key,
-                exc_info=True,
             )
             self._reconnect()
             self._publish_once(exchange, routing_key, envelope)
@@ -75,7 +76,7 @@ class RabbitMQPublisher(AbstractContextManager["RabbitMQPublisher"]):
         self._ensure_channel().basic_publish(
             exchange=exchange,
             routing_key=routing_key,
-            body=envelope.model_dump_json().encode("utf-8"),
+            body=envelope.to_json_bytes(),
             properties=pika.BasicProperties(
                 content_type="application/json",
                 delivery_mode=pika.DeliveryMode.Persistent,
@@ -92,3 +93,59 @@ class RabbitMQPublisher(AbstractContextManager["RabbitMQPublisher"]):
 
 def decode_envelope(body: bytes) -> MessageEnvelope:
     return MessageEnvelope.model_validate(json.loads(body.decode("utf-8")))
+
+
+class RabbitMqEventPublisher:
+    def __init__(
+        self,
+        *,
+        rabbitmq_settings: RabbitMqSettings,
+        connection_factory: ConnectionFactory,
+    ) -> None:
+        self.rabbitmq_settings = rabbitmq_settings
+        self.connection_factory = connection_factory
+        self.connection: pika.BlockingConnection | None = None
+        self.channel: pika.channel.Channel | None = None
+
+    def publish(self, envelope: MessageEnvelope) -> None:
+        routing_key = f"event.{envelope.message_type}"
+        try:
+            channel = self._ensure_channel()
+            channel.exchange_declare(
+                exchange=self.rabbitmq_settings.event_exchange,
+                exchange_type="topic",
+                durable=True,
+            )
+            channel.basic_publish(
+                exchange=self.rabbitmq_settings.event_exchange,
+                routing_key=routing_key,
+                body=envelope.to_json_bytes(),
+                properties=pika.BasicProperties(
+                    content_type="application/json",
+                    delivery_mode=pika.DeliveryMode.Persistent,
+                    message_id=envelope.message_id,
+                    correlation_id=envelope.correlation_id,
+                ),
+            )
+        except Exception as exc:
+            raise MessagePublishError(
+                f"Failed to publish event message_type={envelope.message_type}"
+            ) from exc
+
+        logger.info(
+            "published event tenant_key=%s message_id=%s correlation_id=%s message_type=%s "
+            "routing_key=%s",
+            envelope.tenant_key,
+            envelope.message_id,
+            envelope.correlation_id,
+            envelope.message_type,
+            routing_key,
+        )
+
+    def _ensure_channel(self) -> pika.channel.Channel:
+        if self.connection is None or self.connection.is_closed:
+            self.connection = self.connection_factory()
+            self.channel = None
+        if self.channel is None or self.channel.is_closed:
+            self.channel = self.connection.channel()
+        return self.channel

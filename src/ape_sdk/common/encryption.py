@@ -13,7 +13,8 @@ class SecretEncryptionProvider(Protocol):
 class DevelopmentPlaceholderEncryptionProvider:
     """Development-only reversible obfuscation.
 
-    TODO: Replace this with authenticated encryption backed by managed keys before production.
+    TODO_TEMPLATE: Replace this with authenticated encryption backed by managed keys if this
+    template worker stores secrets.
     This is not secure encryption.
     """
 

@@ -7,6 +7,8 @@ import pika
 
 from ape_sdk.bus.publisher import decode_envelope
 from ape_sdk.messages.envelope import MessageEnvelope
+from ape_sdk.worker.processing import MessageDecision, WorkerCommandProcessor
+from ape_sdk.worker.settings import RabbitMqSettings
 
 logger = logging.getLogger(__name__)
 MessageHandler = Callable[[MessageEnvelope], None]
@@ -56,7 +58,13 @@ class RabbitMQConsumer:
                 routing_key=binding.routing_key,
             )
 
-            def callback(channel, method, properties, body, binding=binding) -> None:  # type: ignore[no-untyped-def]
+            def callback(  # type: ignore[no-untyped-def]
+                channel,
+                method,
+                properties,
+                body,
+                binding=binding,
+            ) -> None:
                 error: list[BaseException] = []
 
                 def run_handler() -> None:
@@ -83,7 +91,7 @@ class RabbitMQConsumer:
                             method.delivery_tag,
                         )
                 except Exception:
-                    logger.exception("failed to handle message on queue=%s", binding.queue_name)
+                    logger.error("failed to handle message on queue=%s", binding.queue_name)
                     if channel.is_open:
                         channel.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
                     else:
@@ -109,3 +117,72 @@ class RabbitMQConsumer:
         if self.channel.is_open:
             self.channel.stop_consuming()
             self.channel.close()
+
+
+class RabbitMqCommandConsumer:
+    def __init__(
+        self,
+        *,
+        rabbitmq_settings: RabbitMqSettings,
+        processor: WorkerCommandProcessor,
+        connection_factory: Callable[[], pika.BlockingConnection],
+    ) -> None:
+        self.rabbitmq_settings = rabbitmq_settings
+        self.processor = processor
+        self.connection_factory = connection_factory
+
+    def consume(self) -> None:
+        connection = self.connection_factory()
+        channel = connection.channel()
+        channel.exchange_declare(
+            exchange=self.rabbitmq_settings.command_exchange,
+            exchange_type="topic",
+            durable=True,
+        )
+        channel.exchange_declare(
+            exchange=self.rabbitmq_settings.event_exchange,
+            exchange_type="topic",
+            durable=True,
+        )
+        channel.queue_declare(queue=self.rabbitmq_settings.queue_name, durable=True)
+        for binding_key in self.rabbitmq_settings.binding_keys:
+            channel.queue_bind(
+                exchange=self.rabbitmq_settings.command_exchange,
+                queue=self.rabbitmq_settings.queue_name,
+                routing_key=binding_key,
+            )
+        channel.basic_qos(prefetch_count=1)
+
+        def callback(channel, method, properties, body) -> None:  # type: ignore[no-untyped-def]
+            self._handle_delivery(channel, method.delivery_tag, body)
+
+        channel.basic_consume(
+            queue=self.rabbitmq_settings.queue_name,
+            on_message_callback=callback,
+        )
+        logger.info(
+            "consuming commands queue=%s command_exchange=%s event_exchange=%s binding_keys=%s",
+            self.rabbitmq_settings.queue_name,
+            self.rabbitmq_settings.command_exchange,
+            self.rabbitmq_settings.event_exchange,
+            list(self.rabbitmq_settings.binding_keys),
+        )
+        channel.start_consuming()
+
+    def _handle_delivery(  # type: ignore[no-untyped-def]
+        self,
+        channel,
+        delivery_tag: int,
+        body: bytes,
+    ) -> None:
+        try:
+            result = self.processor.process(body)
+        except Exception:
+            logger.error("unexpected command processor failure")
+            channel.basic_nack(delivery_tag=delivery_tag, requeue=False)
+            return
+
+        if result.decision == MessageDecision.ACK:
+            channel.basic_ack(delivery_tag=delivery_tag)
+        else:
+            channel.basic_nack(delivery_tag=delivery_tag, requeue=False)
