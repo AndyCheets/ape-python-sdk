@@ -1,12 +1,11 @@
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from typing import Iterator
 
 from sqlalchemy import URL, create_engine, text
+from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from ape_sdk.tenant.context import TenantWorkerContext
-
 
 SessionFactory = Callable[[], Session]
 
@@ -38,6 +37,12 @@ class TenantDatabase:
                 self.tenant_context.tenant_database_connection_string
             )
         return self._session_factory
+
+    def get_engine(self) -> Engine:
+        bind = self.get_session_factory().kw.get("bind")
+        if not isinstance(bind, Engine):
+            raise RuntimeError("TenantDatabase session factory is not bound to a SQLAlchemy Engine")
+        return bind
 
 
 def create_tenant_session_factory(connection_string: str) -> sessionmaker[Session]:

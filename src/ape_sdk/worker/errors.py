@@ -1,9 +1,10 @@
+from ape_sdk.control.errors import ControlApiError as _ControlApiError
+
+ControlApiError = _ControlApiError
+
+
 class ConfigurationError(RuntimeError):
     """Raised when required startup configuration is missing or invalid."""
-
-
-class ControlApiError(RuntimeError):
-    """Raised when tenant worker context cannot be resolved."""
 
 
 class MessagePublishError(RuntimeError):

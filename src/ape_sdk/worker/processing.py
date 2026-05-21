@@ -1,8 +1,8 @@
 import json
 import logging
-from collections.abc import Protocol
 from dataclasses import dataclass
 from enum import Enum
+from typing import Any, Protocol
 
 from pydantic import ValidationError
 
@@ -35,6 +35,13 @@ class MessageDecision(Enum):
 @dataclass(frozen=True)
 class MessageProcessingResult:
     decision: MessageDecision
+
+
+@dataclass(frozen=True)
+class TaskResultOutcome:
+    message_type: str
+    payload: dict[str, Any]
+    decision: MessageDecision = MessageDecision.ACK
 
 
 class WorkerCommandProcessor:
@@ -91,10 +98,11 @@ class WorkerCommandProcessor:
             return MessageProcessingResult(MessageDecision.NACK_WITHOUT_REQUEUE)
 
         try:
-            self._publish_completed_event(envelope, result)
+            outcome = self.build_task_result_outcome(envelope, result)
+            self._publish_task_result_event(envelope, outcome)
         except Exception as exc:
             logger.error(
-                "completed event publish failed tenant_key=%s message_id=%s correlation_id=%s "
+                "task result event publish failed tenant_key=%s message_id=%s correlation_id=%s "
                 "message_type=%s error_type=%s error_message=%s",
                 envelope.tenant_key,
                 envelope.message_id,
@@ -112,7 +120,18 @@ class WorkerCommandProcessor:
             envelope.correlation_id,
             envelope.message_type,
         )
-        return MessageProcessingResult(MessageDecision.ACK)
+        return MessageProcessingResult(outcome.decision)
+
+    def build_task_result_outcome(
+        self,
+        source_command: MessageEnvelope,
+        result: WorkerTaskResult,
+    ) -> TaskResultOutcome:
+        return TaskResultOutcome(
+            message_type=self.settings.worker.completed_event_message_type,
+            payload=result.payload,
+            decision=MessageDecision.ACK,
+        )
 
     def _parse_envelope(self, body: bytes) -> MessageEnvelope | None:
         try:
@@ -130,11 +149,21 @@ class WorkerCommandProcessor:
         source_command: MessageEnvelope,
         result: WorkerTaskResult,
     ) -> None:
+        self._publish_task_result_event(
+            source_command,
+            self.build_task_result_outcome(source_command, result),
+        )
+
+    def _publish_task_result_event(
+        self,
+        source_command: MessageEnvelope,
+        outcome: TaskResultOutcome,
+    ) -> None:
         envelope = MessageEnvelope.new_event(
             source_command=source_command,
             source=self.settings.app.service_name,
-            message_type=self.settings.worker.completed_event_message_type,
-            payload=result.payload,
+            message_type=outcome.message_type,
+            payload=outcome.payload,
         )
         self.event_publisher.publish(envelope)
 
@@ -143,10 +172,7 @@ class WorkerCommandProcessor:
             source_command=source_command,
             source=self.settings.app.service_name,
             message_type=self.settings.worker.failed_event_message_type,
-            payload={
-                "errorType": type(exc).__name__,
-                "errorMessage": sanitise_error_message(str(exc)),
-            },
+            payload=self.build_exception_failed_event_payload(exc),
         )
         try:
             self.event_publisher.publish(envelope)
@@ -161,3 +187,9 @@ class WorkerCommandProcessor:
                 type(publish_exc).__name__,
                 sanitise_error_message(str(publish_exc)),
             )
+
+    def build_exception_failed_event_payload(self, exc: Exception) -> dict[str, Any]:
+        return {
+            "errorType": type(exc).__name__,
+            "errorMessage": sanitise_error_message(str(exc)),
+        }
