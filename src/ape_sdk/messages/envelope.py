@@ -44,9 +44,10 @@ class MessageEnvelope(BaseModel):
             tenantKey=source_command.tenant_key,
             source=source,
             messageType=message_type,
-            schemaVersion=1,
+            schemaVersion=source_command.schema_version,
             createdAtUtc=datetime.now(timezone.utc),
             metadata={
+                **source_command.metadata,
                 "sourceCommandMessageId": source_command.message_id,
                 "sourceCommandMessageType": source_command.message_type,
             },
@@ -79,4 +80,3 @@ class MessageEnvelope(BaseModel):
 
     def to_json_bytes(self) -> bytes:
         return self.model_dump_json(by_alias=True).encode("utf-8")
-
